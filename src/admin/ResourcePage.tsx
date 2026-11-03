@@ -20,7 +20,7 @@ type Props = {
 
 export default function ResourcePage({ resource, createSignal, onOpenMember, onEnroll, extra }: Props) {
   const config = resourceConfigs[resource]
-  const { data, create, update, remove, restore, renewMember, log } = useAdminStore()
+  const { data, create, update, remove, restore, renewMember, openGate: openGateRequest, log, mode } = useAdminStore()
   const toast = useToast()
   const records = data[resource]
   const [query, setQuery] = useState('')
@@ -95,23 +95,43 @@ export default function ResourcePage({ resource, createSignal, onOpenMember, onE
     toast({ title: 'Export ready', description: `${rows.length} rows downloaded as CSV`, tone: 'ok' })
   }
 
-  const saveRecord = (values: Omit<ResourceRecord, 'id'>) => {
+  const saveRecord = async (values: Omit<ResourceRecord, 'id'>) => {
+    const payload = mode === 'demo'
+      ? (Object.fromEntries(Object.entries(values).map(([key, value]) => [key, key === 'memberName' ? value.replace(/\s*\([A-Z0-9-]+\)\s*$/i, '') : value])) as Omit<ResourceRecord, 'id'>)
+      : values
     if (editing && editing !== 'new') {
-      update(resource, { ...editing, ...values })
+      if (!(await update(resource, { ...editing, ...payload }))) return false
       toast({ title: `${config.singular} updated`, tone: 'ok' })
     } else {
-      create(resource, values)
-      toast({ title: `${config.singular} created`, tone: 'ok' })
+      const result = await create(resource, payload)
+      if (!result.ok) return false
+      const temporaryPassword = result.meta?.temporaryPassword
+      if (temporaryPassword) {
+        toast({ title: 'Staff account created', description: `Temporary password: ${temporaryPassword} — share it securely; it won't be shown again.`, tone: 'ok', action: { label: 'Copy', onClick: () => void navigator.clipboard.writeText(temporaryPassword) } })
+      } else {
+        toast({ title: `${config.singular} created`, tone: 'ok' })
+      }
     }
     setEditing(null)
+    return true
   }
 
-  const openGate = (gate: ResourceRecord, reason: string) => {
-    const now = new Date()
-    update(resource, { ...gate, lastEvent: now.toTimeString().slice(0, 8) })
-    log('GATE_OPEN', 'gates', `Remote-opened ${gate.name}: ${reason}`)
-    toast({ title: `${gate.name} opened`, description: 'Relay pulsed for 5 seconds · logged to audit trail', tone: 'ok' })
+  const openGate = async (gate: ResourceRecord, reason: string) => {
+    if (!(await openGateRequest(gate.id, reason))) return
+    toast({ title: `${gate.name} opened`, description: 'Command sent to edge agent · logged to audit trail', tone: 'ok' })
     setGateTarget(null)
+  }
+
+  const optionsFor = (field: FieldConfig): string[] => {
+    switch (field.source) {
+      case 'members': return data.members.map((member) => `${member.name} (${member.memberCode})`)
+      case 'memberCodes': return data.members.map((member) => member.memberCode ?? '')
+      case 'trainers': return data.trainers.map((trainer) => trainer.name ?? '')
+      case 'plans': return data.memberships.filter((plan) => plan.status !== 'Archived').map((plan) => plan.planName ?? '')
+      case 'devices': return data.devices.filter((device) => device.type === 'Biometric').map((device) => device.name ?? '')
+      case 'gates': return data.gates.map((gate) => gate.name ?? '')
+      default: return field.options ?? []
+    }
   }
 
   const counts = statusOptions.slice(1).map((option) => ({ option, count: records.filter((record) => record[config.statusKey ?? ''] === option).length }))
@@ -206,7 +226,7 @@ export default function ResourcePage({ resource, createSignal, onOpenMember, onE
                         {resource === 'members' && (
                           <>
                             <button type="button" className="icon-btn" aria-label="View member" onClick={() => onOpenMember(record.id)}><Eye size={15} /></button>
-                            <button type="button" className="icon-btn accent" aria-label="Renew membership" onClick={() => { renewMember(record.id); toast({ title: `${record.name} renewed`, description: 'Invoice generated & expiry extended', tone: 'ok' }) }}><RefreshCw size={15} /></button>
+                            <button type="button" className="icon-btn accent" aria-label="Renew membership" onClick={() => { void renewMember(record.id).then((ok) => ok && toast({ title: `${record.name} renewed`, description: 'Invoice generated & expiry extended', tone: 'ok' })) }}><RefreshCw size={15} /></button>
                             <a className="icon-btn" aria-label="WhatsApp member" href={`https://wa.me/${(record.phone ?? '').replace(/\D/g, '')}`} target="_blank" rel="noreferrer"><MessageCircle size={15} /></a>
                           </>
                         )}
@@ -244,6 +264,7 @@ export default function ResourcePage({ resource, createSignal, onOpenMember, onE
         open={editing !== null}
         title={editing === 'new' ? `New ${config.singular.toLowerCase()}` : `Edit ${config.singular.toLowerCase()}`}
         fields={config.fields}
+        optionsFor={optionsFor}
         initial={editing && editing !== 'new' ? editing : defaultsFor(resource, records)}
         onClose={() => setEditing(null)}
         onSave={saveRecord}
@@ -289,8 +310,9 @@ function renderCell(resource: ResourceKey, column: string, record: ResourceRecor
   return value || '—'
 }
 
-function RecordModal({ open, title, fields, initial, onClose, onSave }: { open: boolean; title: string; fields: FieldConfig[]; initial: Record<string, string>; onClose: () => void; onSave: (values: Omit<ResourceRecord, 'id'>) => void }) {
+function RecordModal({ open, title, fields, initial, optionsFor, onClose, onSave }: { open: boolean; title: string; fields: FieldConfig[]; initial: Record<string, string>; optionsFor: (field: FieldConfig) => string[]; onClose: () => void; onSave: (values: Omit<ResourceRecord, 'id'>) => Promise<boolean> }) {
   const [values, setValues] = useState<Record<string, string>>({})
+  const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     if (open) setValues(Object.fromEntries(fields.map((field) => [field.key, initial[field.key] ?? ''])))
@@ -304,10 +326,15 @@ function RecordModal({ open, title, fields, initial, onClose, onSave }: { open: 
     return () => window.removeEventListener('keydown', onKey)
   }, [open, onClose])
 
-  const submit = (event: FormEvent<HTMLFormElement>) => {
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const trimmed = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, value.trim()]))
-    onSave(trimmed as Omit<ResourceRecord, 'id'>)
+    setSaving(true)
+    try {
+      await onSave(trimmed as Omit<ResourceRecord, 'id'>)
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -336,7 +363,7 @@ function RecordModal({ open, title, fields, initial, onClose, onSave }: { open: 
                   {field.type === 'select' ? (
                     <select value={values[field.key] ?? ''} required={field.required} onChange={(event) => setValues((current) => ({ ...current, [field.key]: event.target.value }))}>
                       <option value="" disabled>Select…</option>
-                      {field.options?.map((option) => <option key={option}>{option}</option>)}
+                      {Array.from(new Set([...optionsFor(field), ...(values[field.key] ? [values[field.key]!] : [])])).map((option) => <option key={option}>{option}</option>)}
                     </select>
                   ) : (
                     <input
@@ -346,17 +373,24 @@ function RecordModal({ open, title, fields, initial, onClose, onSave }: { open: 
                       pattern={field.pattern}
                       title={field.hint}
                       placeholder={field.placeholder}
+                      list={field.source ? `list-${field.key}` : undefined}
+                      autoComplete={field.source ? 'off' : undefined}
                       step={field.type === 'number' ? 'any' : undefined}
                       min={field.type === 'number' ? 0 : undefined}
                       onChange={(event) => setValues((current) => ({ ...current, [field.key]: event.target.value }))}
                     />
+                  )}
+                  {field.source && field.type !== 'select' && (
+                    <datalist id={`list-${field.key}`}>
+                      {optionsFor(field).map((option) => <option key={option} value={option} />)}
+                    </datalist>
                   )}
                   {field.hint && <small>{field.hint}</small>}
                 </motion.label>
               ))}
               <div className="form-actions">
                 <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
-                <button type="submit" className="btn primary"><Check size={16} /> Save</button>
+                <button type="submit" className="btn primary" disabled={saving}>{saving ? <span className="btn-spinner" /> : <Check size={16} />} {saving ? 'Saving…' : 'Save'}</button>
               </div>
             </form>
           </motion.section>

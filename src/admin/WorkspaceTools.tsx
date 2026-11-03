@@ -7,7 +7,7 @@ import { isAdminData, useAdminStore } from '../lib/store'
 const maxBackupBytes = 5 * 1024 * 1024
 
 export default function WorkspaceTools() {
-  const { data, replaceAll, reset, log } = useAdminStore()
+  const { data, replaceAll, reset, log, mode } = useAdminStore()
   const toast = useToast()
   const fileInput = useRef<HTMLInputElement>(null)
   const [confirmReset, setConfirmReset] = useState(false)
@@ -55,6 +55,8 @@ export default function WorkspaceTools() {
         <p>Download every member, payment, credential and audit entry as a single JSON file.</p>
         <button type="button" className="btn ghost sm" onClick={backup}><Download size={14} /> Download backup</button>
       </article>
+      {mode === 'demo' && (
+      <>
       <article className="card tool">
         <Upload size={20} />
         <strong>Restore from backup</strong>
@@ -68,6 +70,8 @@ export default function WorkspaceTools() {
         <p>Regenerates the sample workspace. Use before a fresh sales demo.</p>
         <button type="button" className="btn danger sm" onClick={doReset}><RotateCcw size={14} /> {confirmReset ? 'Click again to confirm' : 'Reset workspace'}</button>
       </article>
+      </>
+      )}
     </section>
   )
 }

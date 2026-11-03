@@ -23,7 +23,7 @@ type ShellProps = { user: SessionUser; tab: AdminTab; onTabChange: (tab: AdminTa
 
 export default function AdminApp(props: ShellProps) {
   return (
-    <AdminStoreProvider actor={props.user.email}>
+    <AdminStoreProvider actor={props.user.email} mode={props.user.mode}>
       <AdminShell {...props} />
     </AdminStoreProvider>
   )
@@ -32,7 +32,7 @@ export default function AdminApp(props: ShellProps) {
 const themeKey = 'cult-admin-theme'
 
 function AdminShell({ user, tab, onTabChange, onExit, onLogout }: ShellProps) {
-  const { data, renewMember, log } = useAdminStore()
+  const { data, renewMember, log, status, reload } = useAdminStore()
   const toast = useToast()
   const feed = useLiveFeed()
   const [theme, setTheme] = useState<'dark' | 'light'>(() => (localStorage.getItem(themeKey) === 'light' ? 'light' : 'dark'))
@@ -50,9 +50,9 @@ function AdminShell({ user, tab, onTabChange, onExit, onLogout }: ShellProps) {
   }, [theme])
 
   useEffect(() => {
-    if (loggedIn.current) return
+    if (loggedIn.current || user.mode === 'api') return
     loggedIn.current = true
-    log('LOGIN', 'session', `${user.email} signed in (${user.mode === 'api' ? 'API session' : 'local demo'})`)
+    log('LOGIN', 'session', `${user.email} signed in (local demo)`)
   }, [log, user])
 
   const idleMinutes = Number(data.settings.find((setting) => setting.key === 'idleLockMinutes' && setting.status === 'Enabled')?.value) || 0
@@ -84,22 +84,20 @@ function AdminShell({ user, tab, onTabChange, onExit, onLogout }: ShellProps) {
   const simulate = useCallback(async () => {
     if (user.mode === 'api') {
       try {
-        const decision = await simulateFingerprint()
-        const event = feed.emit({ result: decision.result === 'ALLOWED' ? 'GRANTED' : 'DENIED', reason: `API: ${decision.reason.replace(/_/g, ' ').toLowerCase()}` })
+        const event = feed.ingest(await simulateFingerprint())
         if (event) toast({ title: `Access ${event.result.toLowerCase()}`, description: `${event.member} · ${event.reason}`, tone: event.result === 'GRANTED' ? 'ok' : 'danger' })
-        return
-      } catch {
-        toast({ title: 'Edge API unreachable', description: 'Falling back to local simulation', tone: 'danger' })
+      } catch (error) {
+        toast({ title: 'Scan simulation failed', description: error instanceof Error ? error.message : 'API unreachable', tone: 'danger' })
       }
+      return
     }
     const event = feed.emit()
     if (event) toast({ title: `Access ${event.result.toLowerCase()}`, description: `${event.member} · ${event.reason}`, tone: event.result === 'GRANTED' ? 'ok' : 'danger' })
   }, [feed, toast, user.mode])
 
-  const renew = useCallback((id: string) => {
+  const renew = useCallback(async (id: string) => {
     const member = data.members.find((item) => item.id === id)
-    renewMember(id)
-    toast({ title: `${member?.name ?? 'Member'} renewed`, description: 'Invoice generated · expiry extended', tone: 'ok' })
+    if (await renewMember(id)) toast({ title: `${member?.name ?? 'Member'} renewed`, description: 'Invoice generated · expiry extended', tone: 'ok' })
   }, [data.members, renewMember, toast])
 
   const alerts = useMemo(() => {
@@ -232,11 +230,19 @@ function AdminShell({ user, tab, onTabChange, onExit, onLogout }: ShellProps) {
         </header>
 
         <main className="page">
+          {status !== 'ready' ? (
+            <div className="workspace-state">
+              {status === 'loading' ? <span className="scene-loading"><span /></span> : <TriangleAlert size={28} />}
+              <strong>{status === 'loading' ? 'Loading workspace…' : 'Workspace could not be loaded'}</strong>
+              {status === 'error' && <button type="button" className="btn primary sm" onClick={() => void reload()}>Retry</button>}
+            </div>
+          ) : (
           <AnimatePresence mode="wait">
             <motion.div key={tab} initial={{ opacity: 0, y: 18, filter: 'blur(6px)' }} animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }} exit={{ opacity: 0, y: -12, filter: 'blur(4px)' }} transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}>
               {page}
             </motion.div>
           </AnimatePresence>
+          )}
         </main>
       </div>
 

@@ -1,6 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useState } from 'react'
 import { ToastProvider, useToast } from './components/ui/Toast'
-import { logout, restoreSession } from './lib/api'
+import { logout, onSessionExpired, restoreSession } from './lib/api'
 import { isAdminTab } from './lib/seed'
 import type { AdminTab, SessionUser } from './lib/types'
 
@@ -22,6 +22,14 @@ function Router() {
   const [tab, setTab] = useState<AdminTab>(tabFromPath)
   const [user, setUser] = useState<SessionUser | null>(null)
   const [checking, setChecking] = useState(screenFromPath() === 'admin')
+
+  useEffect(() => {
+    onSessionExpired(() => {
+      setUser(null)
+      toast({ title: 'Session expired', description: 'Please sign in again.', tone: 'info' })
+    })
+    return () => onSessionExpired(null)
+  }, [toast])
 
   useEffect(() => {
     const sync = () => {

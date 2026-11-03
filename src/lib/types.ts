@@ -34,6 +34,7 @@ export type FieldConfig = {
   required?: boolean
   pattern?: string
   hint?: string
+  source?: 'members' | 'memberCodes' | 'trainers' | 'plans' | 'devices' | 'gates'
 }
 
 export type ResourceConfig = {

@@ -449,6 +449,19 @@ kbd {
   position: relative;
 }
 
+.workspace-state {
+  align-content: center;
+  color: var(--muted);
+  display: grid;
+  gap: 14px;
+  justify-items: center;
+  min-height: 60vh;
+  text-align: center;
+}
+
+.workspace-state strong { color: var(--heading); font-size: 16px; }
+.workspace-state .scene-loading { height: auto; }
+
 /* ───────────── Cards ───────────── */
 .card {
   backdrop-filter: blur(12px);

@@ -12,7 +12,7 @@ const fingers = ['Right Thumb', 'Left Thumb', 'Right Index', 'Left Index']
 const requiredScans = 3
 
 export default function EnrollWizard({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { data, create, update, log } = useAdminStore()
+  const { data, create, update, log, mode, reload } = useAdminStore()
   const toast = useToast()
   const [step, setStep] = useState<'select' | 'capture' | 'done'>('select')
   const [memberId, setMemberId] = useState('')
@@ -58,12 +58,19 @@ export default function EnrollWizard({ open, onClose }: { open: boolean; onClose
     }, 1300)
   }
 
-  const finish = () => {
+  const finish = async () => {
     if (!member) return
     const quality = Math.round(scans.reduce((sum, value) => sum + value, 0) / Math.max(1, scans.length))
-    create('biometrics', { memberName: member.name ?? '', finger, device, quality: String(quality), status: 'Active', lastSync: isoDate(new Date()) })
-    if (member.status === 'Biometric Pending') update('members', { ...member, status: 'Active' })
-    log('ENROLL', 'biometrics', `Enrolled ${finger} for ${member.name} on ${device} (quality ${quality})`)
+    const memberName = mode === 'api' ? `${member.name} (${member.memberCode})` : member.name ?? ''
+    const result = await create('biometrics', { memberName, finger, device, quality: String(quality), status: 'Active', lastSync: isoDate(new Date()) })
+    if (!result.ok) return
+    if (mode === 'api') {
+      // Server activated the member and wrote the ENROLL audit entry; pull the fresh state.
+      void reload()
+    } else {
+      if (member.status === 'Biometric Pending') void update('members', { ...member, status: 'Active' })
+      log('ENROLL', 'biometrics', `Enrolled ${finger} for ${member.name} on ${device} (quality ${quality})`)
+    }
     toast({ title: 'Fingerprint enrolled', description: `${member.name} can now use biometric entry.`, tone: 'ok' })
     onClose()
   }
